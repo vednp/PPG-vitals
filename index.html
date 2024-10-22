@@ -29,16 +29,13 @@
       document.querySelector("#record").addEventListener("click", onRecord);
 
       let video, c_tmp, ctx_tmp;
-      let frameCount = 0;
-      let delay = 100; // Throttle to 10 FPS
-      let xMean = 0;
       let nFrame = 0;
-      const WINDOW_LENGTH = 300; // 5 seconds @ 60 FPS
+      const WINDOW_LENGTH = 300;
       let acdc = Array(WINDOW_LENGTH).fill(0.5);
       let heartBeats = 0;
       let bpm = 0;
-      let lastBeatTimes = []; // Store last few beat times for BPM calculation
-      const PEAK_THRESHOLD = 0.05;
+      let lastBeatTimes = []; // Store beat timestamps for BPM calculation
+      const PEAK_THRESHOLD = 0.02; // Adjusted for better peak detection
       let dataQueue = [];
 
       let constraintsObj = {
@@ -48,29 +45,14 @@
           height: { ideal: 720 },
           frameRate: { ideal: 60 },
           facingMode: "environment",
+          torch: true, // Request to activate flash
         },
       };
-
-      // Enable flashlight (if supported by the device)
-      function enableFlash() {
-        const track = video.srcObject.getVideoTracks()[0];
-        const imageCapture = new ImageCapture(track);
-        imageCapture
-          .getPhotoCapabilities()
-          .then(() => {
-            track.applyConstraints({
-              advanced: [{ torch: true }],
-            });
-          })
-          .catch((err) => {
-            console.log("Flash not supported: ", err);
-          });
-      }
 
       function init() {
         c_tmp = document.getElementById("output-canvas");
         ctx_tmp = c_tmp.getContext("2d");
-        createChart(); // Initialize chart
+        createChart();
       }
 
       // Detrend to remove DC component
@@ -111,7 +93,7 @@
         return peaks;
       }
 
-      // Calculate BPM from the recent heartbeats
+      // Calculate BPM from the detected heartbeats
       function calculateBPM() {
         if (lastBeatTimes.length > 1) {
           const intervals = [];
@@ -120,7 +102,7 @@
           }
           const avgInterval =
             intervals.reduce((a, b) => a + b, 0) / intervals.length;
-          bpm = Math.round(60000 / avgInterval); // 60,000ms = 1 minute
+          bpm = Math.round(60000 / avgInterval); // Convert ms to BPM
         }
         document.getElementById("bpm").innerHTML = `BPM: ${bpm}`;
       }
@@ -141,26 +123,25 @@
             rgbRed += frame.data[i * 4]; // Sum of red pixel values
           }
 
-          xMean = 1 - rgbRed / (count * 255); // Normalize red pixel intensity
+          const xMean = 1 - rgbRed / (count * 255); // Normalize red pixel intensity
           acdc[nFrame % WINDOW_LENGTH] = xMean;
 
           if (nFrame % WINDOW_LENGTH === 0) {
-            // Smoothing and detrending the signal
             const smoothedSignal = smooth(acdc, 5);
             const ac = detrend(smoothedSignal);
 
-            // Detect peaks to count heartbeats
+            // Detect peaks in the signal for heartbeats
             const peaks = detectPeaks(ac, PEAK_THRESHOLD);
             const currentTime = new Date();
             if (peaks.length > 0) {
-              if (
-                lastBeatTimes.length === 0 ||
-                currentTime - lastBeatTimes[lastBeatTimes.length - 1] > 600
-              ) {
+              const timeSinceLastBeat =
+                currentTime - lastBeatTimes[lastBeatTimes.length - 1];
+              if (lastBeatTimes.length === 0 || timeSinceLastBeat > 500) {
+                // Minimum 500ms between beats
                 heartBeats++;
                 lastBeatTimes.push(currentTime);
-                if (lastBeatTimes.length > 10) lastBeatTimes.shift(); // Keep last 10 beat times
-                calculateBPM(); // Update BPM based on the last few beats
+                if (lastBeatTimes.length > 10) lastBeatTimes.shift(); // Keep only recent beats
+                calculateBPM();
                 document.getElementById(
                   "heart-beats"
                 ).innerHTML = `Heart Beats Counted: ${heartBeats}`;
@@ -171,10 +152,10 @@
           document.getElementById(
             "signal"
           ).innerHTML = `Signal Strength (X): ${xMean.toFixed(2)}`;
-          updateChart(new Date(), xMean); // Update chart with the new data
+          updateChart(new Date(), xMean);
           nFrame++;
           computeFrame();
-        }, delay);
+        }, 100); // Adjusted delay for smoother processing
       }
 
       function onRecord() {
@@ -188,11 +169,21 @@
             video.onloadedmetadata = function () {
               video.play();
               init();
-              enableFlash(); // Enable flashlight on supported devices
               video.addEventListener("play", computeFrame);
             };
 
             video.style.display = "none"; // Hide video feed
+
+            // Attempt to turn on the flashlight
+            const track = mediaStreamObj.getVideoTracks()[0];
+            const imageCapture = new ImageCapture(track);
+            imageCapture.getPhotoCapabilities().then((capabilities) => {
+              if (capabilities.fillLightMode.includes("flash")) {
+                track.applyConstraints({
+                  advanced: [{ torch: true }],
+                });
+              }
+            });
           })
           .catch((error) => {
             console.error("Error accessing media devices.", error);
