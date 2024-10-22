@@ -1,323 +1,274 @@
-document.querySelector("#record").addEventListener("click", onRecord);
+// // Heart Rate Monitor Code
+// document.querySelector("#record").addEventListener("click", onRecord);
 
-const inProduction = true; // hide video and tmp canvas
-const channel = "r"; // red only, green='g' and blue='b' channels can be added
+// let video, c_tmp, ctx_tmp; // video from rear-facing-camera and tmp canvas
+// let frameCount = 0; // count number of video frames processed
+// let delay = 0; // delay = 100; should give us 10 fps, estimated around 7
+// let xMean = 0;
+// let nFrame = 0;
+// const WINDOW_LENGTH = 300; // 300 frames = 5s @ 60 FPS
+// let acdc = Array(WINDOW_LENGTH).fill(0.5);
+// let heartBeats = 0;
+// let lastBeatTime = null;
+// const PEAK_THRESHOLD = 0.05; // Threshold for peak detection
 
-let video, c_tmp, ctx_tmp; // video from rear-facing-camera and tmp canvas
-let frameCount = 0; // count number of video frames processed
-let delay = 0; // delay = 100; should give us 10 fps, estimated around 7
-let numOfQualityFrames = 0;
-let xMeanArr = [];
-let xMean = 0;
-let initTime;
-let isSignal = 0;
-let acFrame = 0.008;
-let acWindow = 0.008;
+// let constraintsObj = {
+//   audio: false,
+//   video: {
+//     width: { ideal: 1280 },
+//     height: { ideal: 720 },
+//     frameRate: { ideal: 60 },
+//     facingMode: "environment", // rear-facing-camera
+//   },
+// };
 
-let nFrame = 0;
-const WINDOW_LENGTH = 300; // 300 frames = 5s @ 60 FPS
-let acdc = Array(WINDOW_LENGTH).fill(0.5);
-let ac = Array(WINDOW_LENGTH).fill(0.5);
+// function init() {
+//   c_tmp = document.getElementById("output-canvas");
+//   ctx_tmp = c_tmp.getContext("2d");
+// }
 
-let lineArr = [];
-const MAX_LENGTH = 100;
-const DURATION = 100;
-let chart = realTimeLineChart();
+// // Detrend to remove DC component
+// function detrend(y) {
+//   const n = y.length;
+//   const mean = y.reduce((a, b) => a + b, 0) / n;
+//   return y.map((val) => val - mean);
+// }
 
-let constraintsObj = {
-  audio: false,
-  video: {
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
-    frameRate: { ideal: 60 },
-    facingMode: "environment", // rear-facing-camera
-  },
-};
+// // Detect peaks in the AC signal
+// function detectPeaks(signal, threshold) {
+//   let peaks = [];
+//   for (let i = 1; i < signal.length - 1; i++) {
+//     if (
+//       signal[i] > signal[i - 1] &&
+//       signal[i] > signal[i + 1] &&
+//       signal[i] > threshold
+//     ) {
+//       peaks.push(i);
+//     }
+//   }
+//   return peaks;
+// }
 
-let heartBeats = 0;
-let lastBeatTime = null;
-const PEAK_THRESHOLD = 0.2; // Threshold for peak detection
+// // Real-time frame processing
+// function computeFrame() {
+//   requestAnimationFrame(() => {
+//     ctx_tmp.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+//     let frame = ctx_tmp.getImageData(0, 0, video.videoWidth, video.videoHeight);
 
-function setWH() {
-  let [w, h] = [video.videoWidth, video.videoHeight];
-  document.getElementById("delay").innerHTML = `Frame compute delay: ${delay}`;
-  document.getElementById(
-    "resolution"
-  ).innerHTML = `Video resolution: ${w} x ${h}`;
-  c_tmp.setAttribute("width", w);
-  c_tmp.setAttribute("height", h);
-}
+//     const count = frame.data.length / 4;
+//     let rgbRed = 0;
+//     for (let i = 0; i < count; i++) {
+//       rgbRed += frame.data[i * 4];
+//     }
 
-function init() {
-  c_tmp = document.getElementById("output-canvas");
-  if (inProduction) {
-    c_tmp.style.display = "none";
-  }
-  ctx_tmp = c_tmp.getContext("2d");
-}
+//     xMean = 1 - rgbRed / (count * 255);
+//     acdc[nFrame % WINDOW_LENGTH] = xMean;
 
-// Apply a simple moving average filter to smooth the signal
-function movingAverage(arr, windowSize) {
-  let result = [];
-  for (let i = 0; i <= arr.length - windowSize; i++) {
-    const windowSum = arr.slice(i, i + windowSize).reduce((a, b) => a + b, 0);
-    result.push(windowSum / windowSize);
-  }
-  return result;
-}
+//     if (nFrame % WINDOW_LENGTH === 0) {
+//       // Detrend the signal
+//       const ac = detrend(acdc);
 
-// Apply bandpass filter for heart rate frequency (0.5 - 4 Hz)
-function bandpassFilter(signal, lowCut, highCut, sampleRate) {
-  let filteredSignal = [];
-  // Implement bandpass logic (using FFT or a simple filter like Butterworth)
-  // For simplicity, this is a placeholder.
-  return filteredSignal;
-}
+//       // Detect peaks to count heartbeats
+//       const peaks = detectPeaks(ac, PEAK_THRESHOLD);
+//       const currentTime = new Date();
+//       if (peaks.length > 0) {
+//         if (lastBeatTime === null || currentTime - lastBeatTime > 600) {
+//           // At least 600ms between beats
+//           heartBeats++;
+//           lastBeatTime = currentTime;
+//           document.getElementById(
+//             "heart-beats"
+//           ).innerHTML = `Heart Beats Counted: ${heartBeats}`;
+//         }
+//       }
+//     }
 
-// FFT for heart rate calculation from AC signal
-function calculateHeartRate(acSignal) {
-  const fftResult = fft(acSignal); // Apply FFT to get frequency spectrum
-  const heartRateFreq = findPeakFrequency(fftResult);
-  return heartRateFreq * 60; // Convert frequency to beats per minute (BPM)
-}
-function detrend(y) {
-  const n = y.length;
-  let x = Array.from({ length: n }, (_, i) => i);
+//     document.getElementById("signal").innerHTML = `X: ${xMean.toFixed(2)}`;
+//     nFrame++;
+//     computeFrame(); // Continuously call for real-time processing
+//   });
+// }
 
-  let sx = 0,
-    sy = 0,
-    sxy = 0,
-    sxx = 0;
-  for (let i = 0; i < n; i++) {
-    sx += x[i];
-    sy += y[i];
-    sxy += x[i] * y[i];
-    sxx += x[i] * x[i];
-  }
+// function onRecord() {
+//   this.disabled = true;
+//   navigator.mediaDevices
+//     .getUserMedia(constraintsObj)
+//     .then((mediaStreamObj) => {
+//       video = document.getElementById("video");
+//       video.srcObject = mediaStreamObj;
 
-  const mx = sx / n;
-  const my = sy / n;
-  const xx = n * sxx - sx * sx;
-  const xy = n * sxy - sx * sy;
-  const slope = xy / xx;
-  const intercept = my - slope * mx;
+//       video.onloadedmetadata = function (ev) {
+//         video.play();
+//         init();
+//         video.addEventListener("play", computeFrame);
+//       };
 
-  return y.map((val, i) => val - (intercept + slope * i));
-}
+//       // Hide the video element to not display the feed
+//       video.style.display = "none";
+//     })
+//     .catch((error) => {
+//       console.error("Error accessing media devices.", error);
+//     });
+// }
 
-// Detect peaks in the AC signal
-function detectPeaks(signal, threshold) {
-  let peaks = [];
-  for (let i = 1; i < signal.length - 1; i++) {
-    if (
-      signal[i] > signal[i - 1] &&
-      signal[i] > signal[i + 1] &&
-      signal[i] > threshold
-    ) {
-      peaks.push(i);
-    }
-  }
-  return peaks;
-}
-function computeFrame() {
-  requestAnimationFrame(() => {
-    if (nFrame > DURATION) {
-      ctx_tmp.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
-      let frame = ctx_tmp.getImageData(
-        0,
-        0,
-        video.videoWidth,
-        video.videoHeight
-      );
+// // Real-Time Line Chart Code
+// function realTimeLineChart() {
+//   var margin = { top: 20, right: 20, bottom: 50, left: 50 },
+//     width = 600,
+//     height = 400,
+//     duration = 500,
+//     color = ["#006400", "#4682b4", "#dc143c"];
 
-      const count = frame.data.length / 4;
-      let rgbRed = 0;
-      for (let i = 0; i < count; i++) {
-        rgbRed += frame.data[i * 4];
-      }
+//   function chart(selection) {
+//     selection.each(function (data) {
+//       data = ["x"].map(function (c) {
+//         return {
+//           label: c,
+//           values: data.map(function (d) {
+//             return { time: +d.time, value: d[c], signal: +d.signal };
+//           }),
+//         };
+//       });
 
-      xMean = 1 - rgbRed / (count * 255);
-      let xMeanData = {
-        time: (new Date() - initTime) / 1000,
-        x: xMean,
-      };
+//       var t = d3.transition().duration(duration).ease(d3.easeLinear),
+//         x = d3.scaleTime().rangeRound([0, width - margin.left - margin.right]),
+//         y = d3
+//           .scaleLinear()
+//           .rangeRound([height - margin.top - margin.bottom, 0]),
+//         z = d3.scaleOrdinal(color);
 
-      acdc[nFrame % WINDOW_LENGTH] = xMean;
+//       var xMin = d3.min(data, function (c) {
+//         return d3.min(c.values, function (d) {
+//           return d.time;
+//         });
+//       });
+//       var xMax = new Date(
+//         new Date(
+//           d3.max(data, function (c) {
+//             return d3.max(c.values, function (d) {
+//               return d.time;
+//             });
+//           })
+//         ).getTime() -
+//           duration * 2
+//       );
 
-      if (nFrame % WINDOW_LENGTH == 0) {
-        document.getElementById("signal-window").innerHTML = `nWindow: ${
-          nFrame / WINDOW_LENGTH
-        }`;
-        ac = detrend(acdc);
-        ac = bandpassFilter(ac, 0.5, 4, 60);
-        acWindow = movingAverage(ac, 5); // 5-point moving average
-        const heartRate = calculateHeartRate(ac);
-        document.getElementById(
-          "heart-rate"
-        ).innerHTML = `Heart Rate: ${heartRate} BPM`;
+//       x.domain([xMin, xMax]);
+//       y.domain([
+//         d3.min(data, function (c) {
+//           return d3.min(c.values, function (d) {
+//             return d.value;
+//           });
+//         }),
+//         d3.max(data, function (c) {
+//           return d3.max(c.values, function (d) {
+//             return d.value;
+//           });
+//         }),
+//       ]);
+//       z.domain(
+//         data.map(function (c) {
+//           return c.label;
+//         })
+//       );
 
-        // Detect peaks to count heartbeats
-        const peaks = detectPeaks(acWindow, PEAK_THRESHOLD);
-        const currentTime = new Date();
-        if (peaks.length > 0) {
-          if (lastBeatTime === null || currentTime - lastBeatTime > 600) {
-            // At least 600ms between beats
-            heartBeats++;
-            lastBeatTime = currentTime;
-            document.getElementById(
-              "heart-beats"
-            ).innerHTML = `Heart Beats Counted: ${heartBeats}`;
-          }
-        }
-      }
+//       var line = d3
+//         .line()
+//         .curve(d3.curveBasis)
+//         .x(function (d) {
+//           return x(d.time);
+//         })
+//         .y(function (d) {
+//           return y(d.value);
+//         });
 
-      acFrame = ac[nFrame % WINDOW_LENGTH];
-      xMeanArr.push(xMeanData);
+//       var svg = d3.select(this).selectAll("svg").data([data]);
+//       var gEnter = svg.enter().append("svg").append("g");
+//       gEnter.append("g").attr("class", "axis x");
+//       gEnter.append("g").attr("class", "axis y");
+//       gEnter
+//         .append("defs")
+//         .append("clipPath")
+//         .attr("id", "clip")
+//         .append("rect")
+//         .attr("width", width - margin.left - margin.right)
+//         .attr("height", height - margin.top - margin.bottom);
+//       gEnter
+//         .append("g")
+//         .attr("class", "lines")
+//         .attr("clip-path", "url(#clip)")
+//         .selectAll(".data")
+//         .data(data)
+//         .enter()
+//         .append("path")
+//         .attr("class", "data");
 
-      document.getElementById(
-        "frame-time"
-      ).innerHTML = `Frame time: ${xMeanData.time.toFixed(2)}s`;
-      document.getElementById(
-        "video-time"
-      ).innerHTML = `Video time: ${video.currentTime.toFixed(2)}s`;
-      document.getElementById("signal").innerHTML = `X: ${xMeanData.x}`;
+//       var svg = selection.select("svg");
+//       svg.attr("width", width).attr("height", height);
+//       var g = svg
+//         .select("g")
+//         .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
-      const fps = (++frameCount / video.currentTime).toFixed(3);
-      document.getElementById(
-        "frame-fps"
-      ).innerHTML = `Frame count: ${frameCount}, FPS: ${fps}`;
+//       g.select("defs clipPath rect")
+//         .transition(t)
+//         .attr("width", width - margin.left - margin.right)
+//         .attr("height", height - margin.top - margin.right);
 
-      ctx_tmp.putImageData(frame, 0, 0);
-    }
-    nFrame += 1;
-    computeFrame(); // Continuously call for real-time processing
-  });
-}
-function windowMean(y) {
-  const n = y.length;
-  let sum = 0;
-  for (let i = 0; i < n; i++) {
-    sum += y[i];
-  }
+//       g.selectAll("g path.data")
+//         .data(data)
+//         .style("stroke", color[1])
+//         .style("stroke-width", 3)
+//         .style("fill", "none")
+//         .transition()
+//         .duration(duration)
+//         .ease(d3.easeLinear)
+//         .on("start", tick);
 
-  return sum / n;
-}
+//       function tick() {
+//         d3.select(this)
+//           .attr("d", function (d) {
+//             return line(d.values);
+//           })
+//           .attr("transform", null);
 
-function detrend(y) {
-  const n = y.length;
-  let x = [];
-  for (let i = 0; i <= n; i++) {
-    x.push(i);
-  }
+//         var xMinLess = new Date(new Date(xMin).getTime() - duration);
+//         d3.active(this)
+//           .attr("transform", "translate(" + x(xMinLess) + ",0)")
+//           .transition()
+//           .on("start", tick);
+//       }
+//     });
+//   }
 
-  let sx = 0;
-  let sy = 0;
-  let sxy = 0;
-  let sxx = 0;
-  for (let i = 0; i < n; i++) {
-    sx += x[i];
-    sy += y[i];
-    sxy += x[i] * y[i];
-    sxx += x[i] * x[i];
-  }
-  const mx = sx / n;
-  const my = sy / n;
-  const xx = n * sxx - sx * sx;
-  const xy = n * sxy - sx * sy;
-  const slope = xy / xx;
-  const intercept = my - slope * mx;
+//   chart.margin = function (_) {
+//     if (!arguments.length) return margin;
+//     margin = _;
+//     return chart;
+//   };
 
-  detrended = [];
-  for (let i = 0; i < n; i++) {
-    detrended.push(y[i] - (intercept + slope * i));
-  }
+//   chart.width = function (_) {
+//     if (!arguments.length) return width;
+//     width = _;
+//     return chart;
+//   };
 
-  return detrended;
-}
+//   chart.height = function (_) {
+//     if (!arguments.length) return height;
+//     height = _;
+//     return chart;
+//   };
 
-function onRecord() {
-  this.disabled = true;
-  navigator.mediaDevices
-    .getUserMedia(constraintsObj)
-    .then(function (mediaStreamObj) {
-      const track = mediaStreamObj.getVideoTracks()[0];
-      const imageCapture = new ImageCapture(track);
-      imageCapture
-        .getPhotoCapabilities()
-        .then(() => {
-          track
-            .applyConstraints({ advanced: [{ torch: true }] })
-            .catch((err) => console.log("No torch", err));
-        })
-        .catch((err) => console.log("No torch", err));
+//   chart.color = function (_) {
+//     if (!arguments.length) return color;
+//     color = _;
+//     return chart;
+//   };
 
-      video = document.getElementById("video");
-      if (inProduction) {
-        video.style.display = "none";
-      }
+//   chart.duration = function (_) {
+//     if (!arguments.length) return duration;
+//     duration = _;
+//     return chart;
+//   };
 
-      if ("srcObject" in video) {
-        video.srcObject = mediaStreamObj;
-      } else {
-        video.src = window.URL.createObjectURL(mediaStreamObj);
-      }
-
-      video.onloadedmetadata = function (ev) {
-        video.play();
-      };
-
-      init();
-      video.addEventListener("play", setWH);
-      video.addEventListener("play", computeFrame);
-      video.addEventListener("play", drawLineChart);
-    })
-    .catch((error) => console.log(error));
-}
-function pauseVideo() {
-  video.pause();
-  video.currentTime = 0;
-}
-
-function seedData() {
-  let now = new Date();
-
-  for (let i = 0; i < MAX_LENGTH; ++i) {
-    lineArr.push({
-      time: new Date(now.getTime() - initTime - (MAX_LENGTH - i) * DURATION),
-      x: 0.5,
-      signal: isSignal,
-    });
-  }
-}
-
-function updateData() {
-  let now = new Date();
-
-  let lineData = {
-    time: now - initTime,
-    x: acFrame,
-    signal: isSignal,
-  };
-  lineArr.push(lineData);
-
-  // if (lineArr.length > 1) {
-  lineArr.shift();
-  // }
-  d3.select("#chart").datum(lineArr).call(chart);
-}
-
-function resize() {
-  if (d3.select("#chart svg").empty()) {
-    return;
-  }
-  chart.width(+d3.select("#chart").style("width").replace(/(px)/g, ""));
-  d3.select("#chart").call(chart);
-}
-
-function drawLineChart() {
-  initTime = new Date();
-  seedData();
-  window.setInterval(updateData, 100);
-  d3.select("#chart").datum(lineArr).call(chart);
-  d3.select(window).on("resize", resize);
-}
+//   return chart;
+// }
