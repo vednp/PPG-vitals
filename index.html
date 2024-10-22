@@ -1,244 +1,306 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Heart Rate Monitor</title>
-  <script src="https://d3js.org/d3.v6.min.js"></script>
-</head>
-<body>
-  <h2>Heart Rate Monitor</h2>
-  <button id="record">Start Recording</button>
-  <p id="heart-beats">Heart Beats Counted: 0</p>
-  <p id="signal">X: 0.00</p>
-  <canvas id="output-canvas" style="display:none;"></canvas>
-  <video id="video" style="display:none;" autoplay></video>
-
-  <div id="chart"></div>
-
-  <script>
-    document.querySelector("#record").addEventListener("click", onRecord);
-
-    let video, c_tmp, ctx_tmp;
-    let frameCount = 0;
-    let delay = 100; // Throttle to 10 FPS
-    let xMean = 0;
-    let nFrame = 0;
-    const WINDOW_LENGTH = 300; // 5 seconds @ 60 FPS
-    let acdc = Array(WINDOW_LENGTH).fill(0.5);
-    let heartBeats = 0;
-    let lastBeatTime = null;
-    const PEAK_THRESHOLD = 0.05;
-    let dataQueue = [];
-
-    let constraintsObj = {
-      audio: false,
-      video: {
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 60 },
-        facingMode: "environment",
-      },
-    };
-
-    function init() {
-      c_tmp = document.getElementById("output-canvas");
-      ctx_tmp = c_tmp.getContext("2d");
-      createChart(); // Initialize chart
-    }
-
-    // Detrend to remove DC component
-    function detrend(y) {
-      const n = y.length;
-      const mean = y.reduce((a, b) => a + b, 0) / n;
-      return y.map((val) => val - mean);
-    }
-
-    // Smoothing signal
-    function smooth(signal, windowSize) {
-      const smoothed = [];
-      for (let i = 0; i < signal.length; i++) {
-        const start = Math.max(0, i - Math.floor(windowSize / 2));
-        const end = Math.min(signal.length - 1, i + Math.floor(windowSize / 2));
-        const window = signal.slice(start, end + 1);
-        const avg = window.reduce((sum, val) => sum + val, 0) / window.length;
-        smoothed.push(avg);
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Heart Rate Monitor</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
       }
-      return smoothed;
-    }
-
-    // Detect peaks in the AC signal
-    function detectPeaks(signal, threshold) {
-      let peaks = [];
-      for (let i = 1; i < signal.length - 1; i++) {
-        if (
-          signal[i] > signal[i - 1] &&
-          signal[i] > signal[i + 1] &&
-          signal[i] > threshold
-        ) {
-          peaks.push(i);
-        }
+      #chart {
+        margin-top: 20px;
       }
-      return peaks;
-    }
+    </style>
+  </head>
+  <body>
+    <h2>Heart Rate Monitor</h2>
+    <button id="record">Start Recording</button>
+    <p id="bpm">BPM: 0</p>
+    <p id="heart-beats">Heart Beats Counted: 0</p>
+    <p id="signal">Signal Strength (X): 0.00</p>
+    <canvas id="output-canvas" style="display: none"></canvas>
+    <video id="video" style="display: none" autoplay></video>
 
-    function computeFrame() {
-      setTimeout(() => {
-        ctx_tmp.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
-        let frame = ctx_tmp.getImageData(0, 0, video.videoWidth, video.videoHeight);
+    <div id="chart"></div>
 
-        const count = frame.data.length / 4;
-        let rgbRed = 0;
-        for (let i = 0; i < count; i++) {
-          rgbRed += frame.data[i * 4]; // Sum of red pixel values
+    <script>
+      document.querySelector("#record").addEventListener("click", onRecord);
+
+      let video, c_tmp, ctx_tmp;
+      let frameCount = 0;
+      let delay = 100; // Throttle to 10 FPS
+      let xMean = 0;
+      let nFrame = 0;
+      const WINDOW_LENGTH = 300; // 5 seconds @ 60 FPS
+      let acdc = Array(WINDOW_LENGTH).fill(0.5);
+      let heartBeats = 0;
+      let bpm = 0;
+      let lastBeatTimes = []; // Store last few beat times for BPM calculation
+      const PEAK_THRESHOLD = 0.05;
+      let dataQueue = [];
+
+      let constraintsObj = {
+        audio: false,
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 60 },
+          facingMode: "environment",
+        },
+      };
+
+      // Enable flashlight (if supported by the device)
+      function enableFlash() {
+        const track = video.srcObject.getVideoTracks()[0];
+        const imageCapture = new ImageCapture(track);
+        imageCapture
+          .getPhotoCapabilities()
+          .then(() => {
+            track.applyConstraints({
+              advanced: [{ torch: true }],
+            });
+          })
+          .catch((err) => {
+            console.log("Flash not supported: ", err);
+          });
+      }
+
+      function init() {
+        c_tmp = document.getElementById("output-canvas");
+        ctx_tmp = c_tmp.getContext("2d");
+        createChart(); // Initialize chart
+      }
+
+      // Detrend to remove DC component
+      function detrend(y) {
+        const n = y.length;
+        const mean = y.reduce((a, b) => a + b, 0) / n;
+        return y.map((val) => val - mean);
+      }
+
+      // Smoothing signal
+      function smooth(signal, windowSize) {
+        const smoothed = [];
+        for (let i = 0; i < signal.length; i++) {
+          const start = Math.max(0, i - Math.floor(windowSize / 2));
+          const end = Math.min(
+            signal.length - 1,
+            i + Math.floor(windowSize / 2)
+          );
+          const window = signal.slice(start, end + 1);
+          const avg = window.reduce((sum, val) => sum + val, 0) / window.length;
+          smoothed.push(avg);
         }
+        return smoothed;
+      }
 
-        xMean = 1 - rgbRed / (count * 255); // Normalize red pixel intensity
-        acdc[nFrame % WINDOW_LENGTH] = xMean;
-
-        if (nFrame % WINDOW_LENGTH === 0) {
-          // Smoothing and detrending the signal
-          const smoothedSignal = smooth(acdc, 5);
-          const ac = detrend(smoothedSignal);
-
-          // Detect peaks to count heartbeats
-          const peaks = detectPeaks(ac, PEAK_THRESHOLD);
-          const currentTime = new Date();
-          if (peaks.length > 0) {
-            if (lastBeatTime === null || currentTime - lastBeatTime > 600) {
-              heartBeats++;
-              lastBeatTime = currentTime;
-              document.getElementById("heart-beats").innerHTML = `Heart Beats Counted: ${heartBeats}`;
-            }
+      // Detect peaks in the AC signal
+      function detectPeaks(signal, threshold) {
+        let peaks = [];
+        for (let i = 1; i < signal.length - 1; i++) {
+          if (
+            signal[i] > signal[i - 1] &&
+            signal[i] > signal[i + 1] &&
+            signal[i] > threshold
+          ) {
+            peaks.push(i);
           }
         }
-
-        document.getElementById("signal").innerHTML = `X: ${xMean.toFixed(2)}`;
-        updateChart(new Date(), xMean); // Update chart with the new data
-        nFrame++;
-        computeFrame();
-      }, delay);
-    }
-
-    function onRecord() {
-      this.disabled = true;
-      navigator.mediaDevices
-        .getUserMedia(constraintsObj)
-        .then((mediaStreamObj) => {
-          video = document.getElementById("video");
-          video.srcObject = mediaStreamObj;
-
-          video.onloadedmetadata = function () {
-            video.play();
-            init();
-            video.addEventListener("play", computeFrame);
-          };
-
-          video.style.display = "none"; // Hide video feed
-        })
-        .catch((error) => {
-          console.error("Error accessing media devices.", error);
-        });
-    }
-
-    // Real-time chart with D3.js
-    let chart;
-    function createChart() {
-      chart = realTimeLineChart()
-        .width(600)
-        .height(300)
-        .duration(500);
-
-      d3.select("#chart").datum(dataQueue).call(chart);
-    }
-
-    function updateChart(time, value) {
-      dataQueue.push({ time: time, value: value });
-      if (dataQueue.length > 50) {
-        dataQueue.shift(); // Keep the latest 50 points
-      }
-      d3.select("#chart").datum(dataQueue).call(chart);
-    }
-
-    function realTimeLineChart() {
-      var margin = { top: 20, right: 20, bottom: 50, left: 50 },
-        width = 600,
-        height = 400,
-        duration = 500,
-        color = ["#006400"];
-
-      function chart(selection) {
-        selection.each(function (data) {
-          var t = d3.transition().duration(duration).ease(d3.easeLinear),
-            x = d3.scaleTime().range([0, width - margin.left - margin.right]),
-            y = d3.scaleLinear().range([height - margin.top - margin.bottom, 0]),
-            line = d3
-              .line()
-              .curve(d3.curveBasis)
-              .x((d) => x(d.time))
-              .y((d) => y(d.value));
-
-          var svg = d3.select(this).selectAll("svg").data([data]);
-
-          var gEnter = svg.enter().append("svg").append("g");
-          gEnter.append("g").attr("class", "axis x");
-          gEnter.append("g").attr("class", "axis y");
-
-          gEnter
-            .append("defs")
-            .append("clipPath")
-            .attr("id", "clip")
-            .append("rect")
-            .attr("width", width - margin.left - margin.right)
-            .attr("height", height - margin.top - margin.bottom);
-
-          gEnter
-            .append("g")
-            .attr("class", "lines")
-            .attr("clip-path", "url(#clip)")
-            .selectAll(".data")
-            .data([data])
-            .enter()
-            .append("path")
-            .attr("class", "data")
-            .style("stroke", color[0])
-            .style("stroke-width", 2)
-            .style("fill", "none");
-
-          svg = selection.select("svg");
-          svg.attr("width", width).attr("height", height);
-
-          var g = svg
-            .select("g")
-            .attr("transform", `translate(${margin.left},${margin.top})`);
-
-          x.domain(d3.extent(data, (d) => d.time));
-          y.domain([0, 1]);
-
-          g.select(".axis.x").attr("transform", `translate(0,${height - margin.bottom})`).call(d3.axisBottom(x));
-          g.select(".axis.y").call(d3.axisLeft(y));
-
-          g.selectAll("g path.data")
-            .data([data])
-            .attr("d", line)
-            .transition(t);
-        });
+        return peaks;
       }
 
-      chart.width = function (_) {
-        return arguments.length ? ((width = _), chart) : width;
-      };
+      // Calculate BPM from the recent heartbeats
+      function calculateBPM() {
+        if (lastBeatTimes.length > 1) {
+          const intervals = [];
+          for (let i = 1; i < lastBeatTimes.length; i++) {
+            intervals.push(lastBeatTimes[i] - lastBeatTimes[i - 1]);
+          }
+          const avgInterval =
+            intervals.reduce((a, b) => a + b, 0) / intervals.length;
+          bpm = Math.round(60000 / avgInterval); // 60,000ms = 1 minute
+        }
+        document.getElementById("bpm").innerHTML = `BPM: ${bpm}`;
+      }
 
-      chart.height = function (_) {
-        return arguments.length ? ((height = _), chart) : height;
-      };
+      function computeFrame() {
+        setTimeout(() => {
+          ctx_tmp.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+          let frame = ctx_tmp.getImageData(
+            0,
+            0,
+            video.videoWidth,
+            video.videoHeight
+          );
 
-      chart.duration = function (_) {
-        return arguments.length ? ((duration = _), chart) : duration;
-      };
+          const count = frame.data.length / 4;
+          let rgbRed = 0;
+          for (let i = 0; i < count; i++) {
+            rgbRed += frame.data[i * 4]; // Sum of red pixel values
+          }
 
-      return chart;
-    }
-  </script>
-</body>
+          xMean = 1 - rgbRed / (count * 255); // Normalize red pixel intensity
+          acdc[nFrame % WINDOW_LENGTH] = xMean;
+
+          if (nFrame % WINDOW_LENGTH === 0) {
+            // Smoothing and detrending the signal
+            const smoothedSignal = smooth(acdc, 5);
+            const ac = detrend(smoothedSignal);
+
+            // Detect peaks to count heartbeats
+            const peaks = detectPeaks(ac, PEAK_THRESHOLD);
+            const currentTime = new Date();
+            if (peaks.length > 0) {
+              if (
+                lastBeatTimes.length === 0 ||
+                currentTime - lastBeatTimes[lastBeatTimes.length - 1] > 600
+              ) {
+                heartBeats++;
+                lastBeatTimes.push(currentTime);
+                if (lastBeatTimes.length > 10) lastBeatTimes.shift(); // Keep last 10 beat times
+                calculateBPM(); // Update BPM based on the last few beats
+                document.getElementById(
+                  "heart-beats"
+                ).innerHTML = `Heart Beats Counted: ${heartBeats}`;
+              }
+            }
+          }
+
+          document.getElementById(
+            "signal"
+          ).innerHTML = `Signal Strength (X): ${xMean.toFixed(2)}`;
+          updateChart(new Date(), xMean); // Update chart with the new data
+          nFrame++;
+          computeFrame();
+        }, delay);
+      }
+
+      function onRecord() {
+        this.disabled = true;
+        navigator.mediaDevices
+          .getUserMedia(constraintsObj)
+          .then((mediaStreamObj) => {
+            video = document.getElementById("video");
+            video.srcObject = mediaStreamObj;
+
+            video.onloadedmetadata = function () {
+              video.play();
+              init();
+              enableFlash(); // Enable flashlight on supported devices
+              video.addEventListener("play", computeFrame);
+            };
+
+            video.style.display = "none"; // Hide video feed
+          })
+          .catch((error) => {
+            console.error("Error accessing media devices.", error);
+          });
+      }
+
+      // Real-time chart with D3.js
+      let chart;
+      function createChart() {
+        chart = realTimeLineChart().width(600).height(300).duration(500);
+
+        d3.select("#chart").datum(dataQueue).call(chart);
+      }
+
+      function updateChart(time, value) {
+        dataQueue.push({ time: time, value: value });
+        if (dataQueue.length > 50) {
+          dataQueue.shift(); // Keep the latest 50 points
+        }
+        d3.select("#chart").datum(dataQueue).call(chart);
+      }
+
+      function realTimeLineChart() {
+        var margin = { top: 20, right: 20, bottom: 50, left: 50 },
+          width = 600,
+          height = 400,
+          duration = 500,
+          color = ["#006400"];
+
+        function chart(selection) {
+          selection.each(function (data) {
+            var t = d3.transition().duration(duration).ease(d3.easeLinear),
+              x = d3.scaleTime().range([0, width - margin.left - margin.right]),
+              y = d3
+                .scaleLinear()
+                .range([height - margin.top - margin.bottom, 0]),
+              line = d3
+                .line()
+                .curve(d3.curveBasis)
+                .x((d) => x(d.time))
+                .y((d) => y(d.value));
+
+            var svg = d3.select(this).selectAll("svg").data([data]);
+
+            var gEnter = svg.enter().append("svg").append("g");
+            gEnter.append("g").attr("class", "axis x");
+            gEnter.append("g").attr("class", "axis y");
+
+            gEnter
+              .append("defs")
+              .append("clipPath")
+              .attr("id", "clip")
+              .append("rect")
+              .attr("width", width - margin.left - margin.right)
+              .attr("height", height - margin.top - margin.bottom);
+
+            gEnter
+              .append("g")
+              .attr("class", "lines")
+              .attr("clip-path", "url(#clip)")
+              .selectAll(".data")
+              .data([data])
+              .enter()
+              .append("path")
+              .attr("class", "data");
+
+            var svg = selection.select("svg");
+            svg.attr("width", width).attr("height", height);
+
+            var g = svg
+              .select("g")
+              .attr(
+                "transform",
+                "translate(" + margin.left + "," + margin.top + ")"
+              );
+
+            x.domain(d3.extent(data, (d) => d.time));
+            y.domain(d3.extent(data, (d) => d.value));
+
+            g.selectAll("g path.data")
+              .data([data])
+              .style("stroke", color[0])
+              .style("stroke-width", 2)
+              .style("fill", "none")
+              .attr("d", line);
+          });
+        }
+
+        chart.width = function (_) {
+          if (!arguments.length) return width;
+          width = _;
+          return chart;
+        };
+
+        chart.height = function (_) {
+          if (!arguments.length) return height;
+          height = _;
+          return chart;
+        };
+
+        chart.duration = function (_) {
+          if (!arguments.length) return duration;
+          duration = _;
+          return chart;
+        };
+
+        return chart;
+      }
+    </script>
+  </body>
 </html>
