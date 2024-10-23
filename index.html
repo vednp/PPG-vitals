@@ -1,207 +1,219 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Heartbeat Detector</title>
     <style>
-      body {
-        font-family: Arial, sans-serif;
-        text-align: center;
-        background-color: #f4f4f4;
-        color: #333;
-      }
-      #video {
-        display: none;
-        width: 300px;
-        height: 300px;
-        background-color: #000;
-      }
-      #output {
-        margin-top: 20px;
-        font-size: 24px;
-        font-weight: bold;
-      }
-      .heart {
-        margin-top: 20px;
-        font-size: 100px;
-        color: red;
-        animation: heartbeat 1s infinite;
-        visibility: hidden;
-      }
-      @keyframes heartbeat {
-        0% {
-          transform: scale(1);
+        body { 
+            font-family: Arial, sans-serif; 
+            text-align: center; 
+            background-color: #f4f4f4;
+            color: #333;
         }
-        25% {
-          transform: scale(1.1);
+        #video {
+            display: none;
+            width: 300px;
+            height: 300px;
+            background-color: #000;
         }
-        50% {
-          transform: scale(1.2);
+        #output { 
+            margin-top: 20px; 
+            font-size: 24px; 
+            font-weight: bold;
         }
-        100% {
-          transform: scale(1);
+        .heart {
+            margin-top: 20px;
+            font-size: 100px;
+            color: red;
+            animation: heartbeat 1s infinite;
+            visibility: hidden;
         }
-      }
-      button {
-        padding: 10px 20px;
-        font-size: 18px;
-        margin: 20px;
-        cursor: pointer;
-      }
+        @keyframes heartbeat {
+            0% { transform: scale(1); }
+            25% { transform: scale(1.1); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 18px;
+            margin: 20px;
+            cursor: pointer;
+        }
     </style>
-  </head>
-  <body>
+</head>
+<body>
     <h1>Heartbeat Detector</h1>
     <p>Place your finger on the camera and flash</p>
-
+    
     <video id="video" autoplay></video>
-    <canvas id="canvas" style="display: none"></canvas>
+    <canvas id="canvas" style="display:none"></canvas>
     <div id="output">Click "Start Measuring" to begin.</div>
-
+    
     <button id="startButton">Start Measuring</button>
-    <button id="retryButton" style="display: none">Read Again</button>
-
+    <button id="retryButton" style="display:none">Read Again</button>
+    
     <div class="heart" id="heart">❤️</div>
 
     <script>
-      const video = document.getElementById("video");
-      const canvas = document.getElementById("canvas");
-      const ctx = canvas.getContext("2d");
-      const heart = document.getElementById("heart");
-      const output = document.getElementById("output");
-      const startButton = document.getElementById("startButton");
-      const retryButton = document.getElementById("retryButton");
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const heart = document.getElementById('heart');
+        const output = document.getElementById('output');
+        const startButton = document.getElementById('startButton');
+        const retryButton = document.getElementById('retryButton');
 
-      let readings = [];
-      const maxReadings = 100;
-      let lastBeatTime = 0;
-      let measuring = false;
-      let timer = null;
+        let readings = [];
+        const maxReadings = 150;
+        let lastBeatTime = 0;
+        let measuring = false;
+        let timer = null;
+        let bpmValues = [];
 
-      // Function to control the camera flash
-      async function toggleFlash(turnOn) {
-        try {
-          const stream = video.srcObject;
-          const track = stream.getVideoTracks()[0];
-          const capabilities = track.getCapabilities();
-          if (capabilities.torch) {
-            await track.applyConstraints({
-              advanced: [{ torch: turnOn }],
+        // Function to control the camera flash
+        async function toggleFlash(turnOn) {
+            try {
+                const stream = video.srcObject;
+                const track = stream.getVideoTracks()[0];
+                const capabilities = track.getCapabilities();
+                if (capabilities.torch) {
+                    await track.applyConstraints({
+                        advanced: [{ torch: turnOn }]
+                    });
+                }
+            } catch (err) {
+                console.log('Flashlight error: ', err);
+            }
+        }
+
+        // Start measuring when button is clicked
+        startButton.addEventListener('click', async function() {
+            startMeasuring();
+        });
+
+        retryButton.addEventListener('click', function() {
+            resetApp();
+        });
+
+        // Start the heartbeat detection process
+        function startMeasuring() {
+            startButton.style.display = 'none';
+            retryButton.style.display = 'none';
+            heart.style.visibility = 'visible';
+            output.textContent = "Measuring...";
+
+            // Access the user's camera
+            navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment', frameRate: { ideal: 30 } }  // Use rear camera and aim for higher frame rate
+            }).then(function(stream) {
+                video.srcObject = stream;
+                video.play();
+
+                // Turn on the flashlight (if available)
+                toggleFlash(true);
+
+                // Start analyzing frames
+                readings = [];
+                bpmValues = [];
+                measuring = true;
+                timer = setInterval(analyzeFrame, 50);
+
+                // Stop measuring after 20 seconds
+                setTimeout(stopMeasuring, 20000);
+            }).catch(function(err) {
+                console.error("Error accessing camera: " + err);
+                output.textContent = "Error accessing camera.";
             });
-          }
-        } catch (err) {
-          console.log("Flashlight error: ", err);
-        }
-      }
-
-      // Start measuring when button is clicked
-      startButton.addEventListener("click", async function () {
-        startMeasuring();
-      });
-
-      retryButton.addEventListener("click", function () {
-        resetApp();
-      });
-
-      // Start the heartbeat detection process
-      function startMeasuring() {
-        startButton.style.display = "none";
-        retryButton.style.display = "none";
-        heart.style.visibility = "visible";
-        output.textContent = "Measuring...";
-
-        // Access the user's camera
-        navigator.mediaDevices
-          .getUserMedia({
-            video: { facingMode: "environment" }, // Use rear camera
-          })
-          .then(function (stream) {
-            video.srcObject = stream;
-            video.play();
-
-            // Turn on the flashlight (if available)
-            toggleFlash(true);
-
-            // Start analyzing frames
-            readings = [];
-            measuring = true;
-            timer = setInterval(analyzeFrame, 50);
-
-            // Stop measuring after 10 seconds
-            setTimeout(stopMeasuring, 10000);
-          })
-          .catch(function (err) {
-            console.error("Error accessing camera: " + err);
-            output.textContent = "Error accessing camera.";
-          });
-      }
-
-      // Analyze video frames to detect heartbeat
-      function analyzeFrame() {
-        if (!measuring) return;
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const length = frame.data.length;
-
-        let totalRed = 0;
-        for (let i = 0; i < length; i += 4) {
-          totalRed += frame.data[i]; // Red channel
         }
 
-        const averageRed = totalRed / (length / 4);
-        processHeartbeat(averageRed);
-      }
+        // Analyze video frames to detect heartbeat
+        function analyzeFrame() {
+            if (!measuring) return;
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const length = frame.data.length;
 
-      // Process heartbeat detection
-      function processHeartbeat(averageRed) {
-        readings.push(averageRed);
-
-        if (readings.length > maxReadings) readings.shift();
-
-        if (readings.length === maxReadings) {
-          const diff =
-            readings[readings.length - 1] - readings[readings.length - 2];
-
-          if (Math.abs(diff) > 10) {
-            detectBeat();
-          }
-        }
-      }
-
-      // Detect a beat and calculate heart rate
-      function detectBeat() {
-        const now = Date.now();
-
-        if (lastBeatTime !== 0) {
-          const timeDiff = now - lastBeatTime;
-          const bpm = 60000 / timeDiff; // Calculate Beats Per Minute (BPM)
-          output.textContent = `Heart Rate: ${Math.round(bpm)} BPM`;
-        } else {
-          output.textContent = `Heartbeat detected!`;
+            let totalRed = 0;
+            for (let i = 0; i < length; i += 4) {
+                totalRed += frame.data[i];  // Red channel
+            }
+            
+            const averageRed = totalRed / (length / 4);
+            processHeartbeat(averageRed);
         }
 
-        lastBeatTime = now;
-      }
+        // Process heartbeat detection
+        function processHeartbeat(averageRed) {
+            readings.push(averageRed);
 
-      // Stop the measurement process and turn off the flashlight
-      function stopMeasuring() {
-        measuring = false;
-        heart.style.visibility = "hidden";
-        toggleFlash(false);
-        clearInterval(timer);
-        retryButton.style.display = "inline-block";
-        output.textContent += " - Measurement Complete";
-      }
+            if (readings.length > maxReadings) readings.shift();
 
-      // Reset the app to allow for a new reading
-      function resetApp() {
-        startButton.style.display = "inline-block";
-        retryButton.style.display = "none";
-        output.textContent = 'Click "Start Measuring" to begin.';
-      }
+            if (readings.length === maxReadings) {
+                const smoothedRed = smoothSignal(readings);
+
+                const diff = smoothedRed[smoothedRed.length - 1] - smoothedRed[smoothedRed.length - 2];
+
+                if (Math.abs(diff) > 10) {
+                    detectBeat();
+                }
+            }
+        }
+
+        // Simple moving average filter to smooth the signal
+        function smoothSignal(data) {
+            const smoothed = [];
+            const windowSize = 5;
+
+            for (let i = 0; i < data.length; i++) {
+                const start = Math.max(0, i - windowSize);
+                const end = i;
+                const windowData = data.slice(start, end + 1);
+                const avg = windowData.reduce((sum, val) => sum + val, 0) / windowData.length;
+                smoothed.push(avg);
+            }
+            return smoothed;
+        }
+
+        // Detect a beat and calculate heart rate
+        function detectBeat() {
+            const now = Date.now();
+
+            if (lastBeatTime !== 0) {
+                const timeDiff = now - lastBeatTime;
+                const bpm = 60000 / timeDiff;  // Calculate Beats Per Minute (BPM)
+                bpmValues.push(bpm);
+                output.textContent = `Current Heart Rate: ${Math.round(bpm)} BPM`;
+            } else {
+                output.textContent = `Heartbeat detected!`;
+            }
+
+            lastBeatTime = now;
+        }
+
+        // Stop the measurement process and turn off the flashlight
+        function stopMeasuring() {
+            measuring = false;
+            heart.style.visibility = 'hidden';
+            toggleFlash(false);
+            clearInterval(timer);
+
+            // Calculate the average BPM
+            const averageBPM = bpmValues.reduce((a, b) => a + b, 0) / bpmValues.length;
+            output.textContent = `Final Heart Rate: ${Math.round(averageBPM)} BPM - Measurement Complete`;
+
+            retryButton.style.display = 'inline-block';
+        }
+
+        // Reset the app to allow for a new reading
+        function resetApp() {
+            startButton.style.display = 'inline-block';
+            retryButton.style.display = 'none';
+            output.textContent = 'Click "Start Measuring" to begin.';
+        }
     </script>
-  </body>
+</body>
 </html>
