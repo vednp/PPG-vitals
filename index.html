@@ -3,294 +3,204 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Heart Rate Monitor</title>
-    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <title>Heartbeat Detector</title>
     <style>
       body {
         font-family: Arial, sans-serif;
+        text-align: center;
+        background-color: #f4f4f4;
+        color: #333;
       }
-      #chart {
+      #video {
+        display: none;
+        width: 300px;
+        height: 300px;
+        background-color: #000;
+      }
+      #output {
         margin-top: 20px;
+        font-size: 24px;
+        font-weight: bold;
+      }
+      .heart {
+        margin-top: 20px;
+        font-size: 100px;
+        color: red;
+        animation: heartbeat 1s infinite;
+        visibility: hidden;
+      }
+      @keyframes heartbeat {
+        0% {
+          transform: scale(1);
+        }
+        25% {
+          transform: scale(1.1);
+        }
+        50% {
+          transform: scale(1.2);
+        }
+        100% {
+          transform: scale(1);
+        }
+      }
+      button {
+        padding: 10px 20px;
+        font-size: 18px;
+        margin: 20px;
+        cursor: pointer;
       }
     </style>
   </head>
   <body>
-    <h2>Heart Rate Monitor</h2>
-    <button id="record">Start Recording</button>
-    <p id="bpm">BPM: 0</p>
-    <p id="heart-beats">Heart Beats Counted: 0</p>
-    <p id="signal">Signal Strength (X): 0.00</p>
-    <canvas id="output-canvas" style="display: none"></canvas>
-    <video id="video" style="display: none" autoplay></video>
+    <h1>Heartbeat Detector</h1>
+    <p>Place your finger on the camera and flash</p>
 
-    <div id="chart"></div>
+    <video id="video" autoplay></video>
+    <canvas id="canvas" style="display: none"></canvas>
+    <div id="output">Click "Start Measuring" to begin.</div>
+
+    <button id="startButton">Start Measuring</button>
+    <button id="retryButton" style="display: none">Read Again</button>
+
+    <div class="heart" id="heart">❤️</div>
 
     <script>
-      document.querySelector("#record").addEventListener("click", onRecord);
+      const video = document.getElementById("video");
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+      const heart = document.getElementById("heart");
+      const output = document.getElementById("output");
+      const startButton = document.getElementById("startButton");
+      const retryButton = document.getElementById("retryButton");
 
-      let video, c_tmp, ctx_tmp;
-      let nFrame = 0;
-      const WINDOW_LENGTH = 300;
-      let acdc = Array(WINDOW_LENGTH).fill(0.5);
-      let heartBeats = 0;
-      let bpm = 0;
-      let lastBeatTimes = []; // Store beat timestamps for BPM calculation
-      const PEAK_THRESHOLD = 0.02; // Adjusted for better peak detection
-      let dataQueue = [];
+      let readings = [];
+      const maxReadings = 100;
+      let lastBeatTime = 0;
+      let measuring = false;
+      let timer = null;
 
-      let constraintsObj = {
-        audio: false,
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 60 },
-          facingMode: "environment",
-          torch: true, // Request to activate flash
-        },
-      };
-
-      function init() {
-        c_tmp = document.getElementById("output-canvas");
-        ctx_tmp = c_tmp.getContext("2d");
-        createChart();
-      }
-
-      // Detrend to remove DC component
-      function detrend(y) {
-        const n = y.length;
-        const mean = y.reduce((a, b) => a + b, 0) / n;
-        return y.map((val) => val - mean);
-      }
-
-      // Smoothing signal
-      function smooth(signal, windowSize) {
-        const smoothed = [];
-        for (let i = 0; i < signal.length; i++) {
-          const start = Math.max(0, i - Math.floor(windowSize / 2));
-          const end = Math.min(
-            signal.length - 1,
-            i + Math.floor(windowSize / 2)
-          );
-          const window = signal.slice(start, end + 1);
-          const avg = window.reduce((sum, val) => sum + val, 0) / window.length;
-          smoothed.push(avg);
-        }
-        return smoothed;
-      }
-
-      // Detect peaks in the AC signal
-      function detectPeaks(signal, threshold) {
-        let peaks = [];
-        for (let i = 1; i < signal.length - 1; i++) {
-          if (
-            signal[i] > signal[i - 1] &&
-            signal[i] > signal[i + 1] &&
-            signal[i] > threshold
-          ) {
-            peaks.push(i);
-          }
-        }
-        return peaks;
-      }
-
-      // Calculate BPM from the detected heartbeats
-      function calculateBPM() {
-        if (lastBeatTimes.length > 1) {
-          const intervals = [];
-          for (let i = 1; i < lastBeatTimes.length; i++) {
-            intervals.push(lastBeatTimes[i] - lastBeatTimes[i - 1]);
-          }
-          const avgInterval =
-            intervals.reduce((a, b) => a + b, 0) / intervals.length;
-          bpm = Math.round(60000 / avgInterval); // Convert ms to BPM
-        }
-        document.getElementById("bpm").innerHTML = `BPM: ${bpm}`;
-      }
-
-      function computeFrame() {
-        setTimeout(() => {
-          ctx_tmp.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
-          let frame = ctx_tmp.getImageData(
-            0,
-            0,
-            video.videoWidth,
-            video.videoHeight
-          );
-
-          const count = frame.data.length / 4;
-          let rgbRed = 0;
-          for (let i = 0; i < count; i++) {
-            rgbRed += frame.data[i * 4]; // Sum of red pixel values
-          }
-
-          const xMean = 1 - rgbRed / (count * 255); // Normalize red pixel intensity
-          acdc[nFrame % WINDOW_LENGTH] = xMean;
-
-          if (nFrame % WINDOW_LENGTH === 0) {
-            const smoothedSignal = smooth(acdc, 5);
-            const ac = detrend(smoothedSignal);
-
-            // Detect peaks in the signal for heartbeats
-            const peaks = detectPeaks(ac, PEAK_THRESHOLD);
-            const currentTime = new Date();
-            if (peaks.length > 0) {
-              const timeSinceLastBeat =
-                currentTime - lastBeatTimes[lastBeatTimes.length - 1];
-              if (lastBeatTimes.length === 0 || timeSinceLastBeat > 500) {
-                // Minimum 500ms between beats
-                heartBeats++;
-                lastBeatTimes.push(currentTime);
-                if (lastBeatTimes.length > 10) lastBeatTimes.shift(); // Keep only recent beats
-                calculateBPM();
-                document.getElementById(
-                  "heart-beats"
-                ).innerHTML = `Heart Beats Counted: ${heartBeats}`;
-              }
-            }
-          }
-
-          document.getElementById(
-            "signal"
-          ).innerHTML = `Signal Strength (X): ${xMean.toFixed(2)}`;
-          updateChart(new Date(), xMean);
-          nFrame++;
-          computeFrame();
-        }, 100); // Adjusted delay for smoother processing
-      }
-
-      function onRecord() {
-        this.disabled = true;
-        navigator.mediaDevices
-          .getUserMedia(constraintsObj)
-          .then((mediaStreamObj) => {
-            video = document.getElementById("video");
-            video.srcObject = mediaStreamObj;
-
-            video.onloadedmetadata = function () {
-              video.play();
-              init();
-              video.addEventListener("play", computeFrame);
-            };
-
-            video.style.display = "none"; // Hide video feed
-
-            // Attempt to turn on the flashlight
-            const track = mediaStreamObj.getVideoTracks()[0];
-            const imageCapture = new ImageCapture(track);
-            imageCapture.getPhotoCapabilities().then((capabilities) => {
-              if (capabilities.fillLightMode.includes("flash")) {
-                track.applyConstraints({
-                  advanced: [{ torch: true }],
-                });
-              }
+      // Function to control the camera flash
+      async function toggleFlash(turnOn) {
+        try {
+          const stream = video.srcObject;
+          const track = stream.getVideoTracks()[0];
+          const capabilities = track.getCapabilities();
+          if (capabilities.torch) {
+            await track.applyConstraints({
+              advanced: [{ torch: turnOn }],
             });
+          }
+        } catch (err) {
+          console.log("Flashlight error: ", err);
+        }
+      }
+
+      // Start measuring when button is clicked
+      startButton.addEventListener("click", async function () {
+        startMeasuring();
+      });
+
+      retryButton.addEventListener("click", function () {
+        resetApp();
+      });
+
+      // Start the heartbeat detection process
+      function startMeasuring() {
+        startButton.style.display = "none";
+        retryButton.style.display = "none";
+        heart.style.visibility = "visible";
+        output.textContent = "Measuring...";
+
+        // Access the user's camera
+        navigator.mediaDevices
+          .getUserMedia({
+            video: { facingMode: "environment" }, // Use rear camera
           })
-          .catch((error) => {
-            console.error("Error accessing media devices.", error);
+          .then(function (stream) {
+            video.srcObject = stream;
+            video.play();
+
+            // Turn on the flashlight (if available)
+            toggleFlash(true);
+
+            // Start analyzing frames
+            readings = [];
+            measuring = true;
+            timer = setInterval(analyzeFrame, 50);
+
+            // Stop measuring after 10 seconds
+            setTimeout(stopMeasuring, 10000);
+          })
+          .catch(function (err) {
+            console.error("Error accessing camera: " + err);
+            output.textContent = "Error accessing camera.";
           });
       }
 
-      // Real-time chart with D3.js
-      let chart;
-      function createChart() {
-        chart = realTimeLineChart().width(600).height(300).duration(500);
+      // Analyze video frames to detect heartbeat
+      function analyzeFrame() {
+        if (!measuring) return;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const length = frame.data.length;
 
-        d3.select("#chart").datum(dataQueue).call(chart);
-      }
-
-      function updateChart(time, value) {
-        dataQueue.push({ time: time, value: value });
-        if (dataQueue.length > 50) {
-          dataQueue.shift(); // Keep the latest 50 points
-        }
-        d3.select("#chart").datum(dataQueue).call(chart);
-      }
-
-      function realTimeLineChart() {
-        var margin = { top: 20, right: 20, bottom: 50, left: 50 },
-          width = 600,
-          height = 400,
-          duration = 500,
-          color = ["#006400"];
-
-        function chart(selection) {
-          selection.each(function (data) {
-            var t = d3.transition().duration(duration).ease(d3.easeLinear),
-              x = d3.scaleTime().range([0, width - margin.left - margin.right]),
-              y = d3
-                .scaleLinear()
-                .range([height - margin.top - margin.bottom, 0]),
-              line = d3
-                .line()
-                .curve(d3.curveBasis)
-                .x((d) => x(d.time))
-                .y((d) => y(d.value));
-
-            var svg = d3.select(this).selectAll("svg").data([data]);
-
-            var gEnter = svg.enter().append("svg").append("g");
-            gEnter.append("g").attr("class", "axis x");
-            gEnter.append("g").attr("class", "axis y");
-
-            gEnter
-              .append("defs")
-              .append("clipPath")
-              .attr("id", "clip")
-              .append("rect")
-              .attr("width", width - margin.left - margin.right)
-              .attr("height", height - margin.top - margin.bottom);
-
-            gEnter
-              .append("g")
-              .attr("class", "lines")
-              .attr("clip-path", "url(#clip)")
-              .selectAll(".data")
-              .data([data])
-              .enter()
-              .append("path")
-              .attr("class", "data");
-
-            var svg = selection.select("svg");
-            svg.attr("width", width).attr("height", height);
-
-            var g = svg
-              .select("g")
-              .attr(
-                "transform",
-                "translate(" + margin.left + "," + margin.top + ")"
-              );
-
-            x.domain(d3.extent(data, (d) => d.time));
-            y.domain(d3.extent(data, (d) => d.value));
-
-            g.selectAll("g path.data")
-              .data([data])
-              .style("stroke", color[0])
-              .style("stroke-width", 2)
-              .style("fill", "none")
-              .attr("d", line);
-          });
+        let totalRed = 0;
+        for (let i = 0; i < length; i += 4) {
+          totalRed += frame.data[i]; // Red channel
         }
 
-        chart.width = function (_) {
-          if (!arguments.length) return width;
-          width = _;
-          return chart;
-        };
+        const averageRed = totalRed / (length / 4);
+        processHeartbeat(averageRed);
+      }
 
-        chart.height = function (_) {
-          if (!arguments.length) return height;
-          height = _;
-          return chart;
-        };
+      // Process heartbeat detection
+      function processHeartbeat(averageRed) {
+        readings.push(averageRed);
 
-        chart.duration = function (_) {
-          if (!arguments.length) return duration;
-          duration = _;
-          return chart;
-        };
+        if (readings.length > maxReadings) readings.shift();
 
-        return chart;
+        if (readings.length === maxReadings) {
+          const diff =
+            readings[readings.length - 1] - readings[readings.length - 2];
+
+          if (Math.abs(diff) > 10) {
+            detectBeat();
+          }
+        }
+      }
+
+      // Detect a beat and calculate heart rate
+      function detectBeat() {
+        const now = Date.now();
+
+        if (lastBeatTime !== 0) {
+          const timeDiff = now - lastBeatTime;
+          const bpm = 60000 / timeDiff; // Calculate Beats Per Minute (BPM)
+          output.textContent = `Heart Rate: ${Math.round(bpm)} BPM`;
+        } else {
+          output.textContent = `Heartbeat detected!`;
+        }
+
+        lastBeatTime = now;
+      }
+
+      // Stop the measurement process and turn off the flashlight
+      function stopMeasuring() {
+        measuring = false;
+        heart.style.visibility = "hidden";
+        toggleFlash(false);
+        clearInterval(timer);
+        retryButton.style.display = "inline-block";
+        output.textContent += " - Measurement Complete";
+      }
+
+      // Reset the app to allow for a new reading
+      function resetApp() {
+        startButton.style.display = "inline-block";
+        retryButton.style.display = "none";
+        output.textContent = 'Click "Start Measuring" to begin.';
       }
     </script>
   </body>
