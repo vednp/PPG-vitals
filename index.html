@@ -1,176 +1,229 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Heartbeat Detector</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            background-color: #f4f4f4;
-            color: #333;
+      body {
+        font-family: Arial, sans-serif;
+        text-align: center;
+        background-color: #f4f4f4;
+        color: #333;
+      }
+      #video {
+        display: none;
+      }
+      #output-canvas {
+        display: none;
+      }
+      .heart {
+        margin-top: 20px;
+        font-size: 100px;
+        color: red;
+        animation: heartbeat 1s infinite;
+        visibility: hidden;
+      }
+      @keyframes heartbeat {
+        0% {
+          transform: scale(1);
         }
-        #video {
-            display: none;
+        25% {
+          transform: scale(1.1);
         }
-        #output-canvas {
-            display: none;
+        50% {
+          transform: scale(1.2);
         }
-        button {
-            padding: 10px 20px;
-            font-size: 18px;
-            margin: 20px;
-            cursor: pointer;
+        100% {
+          transform: scale(1);
         }
-        .heart {
-            font-size: 100px;
-            color: red;
-            visibility: hidden;
-            animation: heartbeat 1s infinite;
-        }
-        @keyframes heartbeat {
-            0% { transform: scale(1); }
-            25% { transform: scale(1.1); }
-            50% { transform: scale(1.2); }
-            100% { transform: scale(1); }
-        }
+      }
+      button {
+        padding: 10px 20px;
+        font-size: 18px;
+        margin: 20px;
+        cursor: pointer;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <h1>Heartbeat Detector</h1>
     <p>Place your finger on the camera and flash</p>
+
     <video id="video" autoplay></video>
     <canvas id="output-canvas"></canvas>
     <div id="output">Click "Start Measuring" to begin.</div>
-    
-    <button id="record">Start Measuring</button>
+
+    <button id="startButton">Start Measuring</button>
+    <button id="retryButton" style="display: none">Read Again</button>
+
     <div class="heart" id="heart">❤️</div>
 
     <script>
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('output-canvas');
-        const ctx = canvas.getContext('2d');
-        const heart = document.getElementById('heart');
-        const output = document.getElementById('output');
-        const recordButton = document.getElementById('record');
+      const video = document.getElementById("video");
+      const canvas = document.getElementById("output-canvas");
+      const ctx = canvas.getContext("2d");
+      const heart = document.getElementById("heart");
+      const output = document.getElementById("output");
+      const startButton = document.getElementById("startButton");
+      const retryButton = document.getElementById("retryButton");
 
-        let frameCount = 0;
-        let nFrame = 0;
-        const WINDOW_LENGTH = 300;
-        let xMean = 0;
-        let initTime;
-        let acFrame = 0.008;
-        let acdc = Array(WINDOW_LENGTH).fill(0.5);
-        let ac = Array(WINDOW_LENGTH).fill(0.5);
+      const constraintsObj = {
+        audio: false,
+        video: {
+          facingMode: "environment", // Rear-facing camera
+          frameRate: { ideal: 60 },
+        },
+      };
 
-        let constraintsObj = {
-            audio: false,
-            video: {
-                frameRate: { ideal: 60 },
-                facingMode: 'environment'
-            }
+      let frameCount = 0;
+      let delay = 0;
+      let xMeanArr = [];
+      let nFrame = 0;
+      const WINDOW_LENGTH = 300;
+      let acdc = Array(WINDOW_LENGTH).fill(0.5);
+      let ac = Array(WINDOW_LENGTH).fill(0.5);
+      let acFrame = 0.008;
+      let acWindow = 0.008;
+      let initTime;
+      let isSignal = 0;
+      let measuring = false;
+      let timer = null;
+
+      startButton.addEventListener("click", startMeasuring);
+      retryButton.addEventListener("click", resetApp);
+
+      async function toggleFlash(turnOn) {
+        try {
+          const stream = video.srcObject;
+          const track = stream.getVideoTracks()[0];
+          const capabilities = track.getCapabilities();
+          if (capabilities.torch) {
+            await track.applyConstraints({
+              advanced: [{ torch: turnOn }],
+            });
+          }
+        } catch (err) {
+          console.log("Flashlight error: ", err);
+        }
+      }
+
+      function startMeasuring() {
+        startButton.style.display = "none";
+        retryButton.style.display = "none";
+        heart.style.visibility = "visible";
+        output.textContent = "Measuring...";
+
+        navigator.mediaDevices
+          .getUserMedia(constraintsObj)
+          .then(function (mediaStreamObj) {
+            video.srcObject = mediaStreamObj;
+            video.play();
+            toggleFlash(true);
+
+            init();
+            video.addEventListener("play", computeFrame);
+            setTimeout(stopMeasuring, 20000); // Stop after 20 seconds
+          })
+          .catch(function (err) {
+            console.error("Error accessing camera: " + err);
+            output.textContent = "Error accessing camera.";
+          });
+      }
+
+      function init() {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx = canvas.getContext("2d");
+        initTime = new Date();
+      }
+
+      function computeFrame() {
+        if (!measuring) return;
+
+        ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+        let frame = ctx.getImageData(0, 0, video.videoWidth, video.videoHeight);
+        let rgbRed = 0;
+
+        const count = frame.data.length / 4;
+        for (let i = 0; i < count; i++) {
+          rgbRed += frame.data[i * 4]; // Red channel only
+        }
+
+        let xMean = 1 - rgbRed / (count * 255); // Invert signal for plotting
+        let xMeanData = {
+          time: (new Date() - initTime) / 1000,
+          x: xMean,
         };
 
-        // Helper functions
-        function setWH() {
-            let [w, h] = [video.videoWidth, video.videoHeight];
-            canvas.width = w;
-            canvas.height = h;
+        acdc[nFrame % WINDOW_LENGTH] = xMean;
+
+        if (nFrame % WINDOW_LENGTH == 0) {
+          if ((nFrame / 100) % 2 == 0) {
+            isSignal = 1;
+            ac = detrend(acdc);
+            acWindow = windowMean(ac);
+          } else {
+            ac = Array(WINDOW_LENGTH).fill(acWindow);
+            isSignal = 0;
+          }
         }
 
-        function windowMean(y) {
-            const n = y.length;
-            let sum = 0;
-            for (let i = 0; i < n; i++) {
-                sum += y[i];
-            }
-            return sum / n;
+        acFrame = ac[nFrame % WINDOW_LENGTH];
+        xMeanArr.push(xMeanData);
+
+        document.getElementById(
+          "output"
+        ).textContent = `Current X: ${xMeanData.x.toFixed(2)}`;
+
+        nFrame += 1;
+        setTimeout(computeFrame, delay); // Continue processing frames
+      }
+
+      function detrend(y) {
+        const n = y.length;
+        let x = [];
+        for (let i = 0; i <= n; i++) x.push(i);
+
+        let sx = 0,
+          sy = 0,
+          sxy = 0,
+          sxx = 0;
+        for (let i = 0; i < n; i++) {
+          sx += x[i];
+          sy += y[i];
+          sxy += x[i] * y[i];
+          sxx += x[i] * x[i];
         }
 
-        function detrend(y) {
-            const n = y.length;
-            let x = [];
-            for (let i = 0; i <= n; i++) {
-                x.push(i);
-            }
-            let sx = 0, sy = 0, sxy = 0, sxx = 0;
-            for (let i = 0; i < n; i++) {
-                sx += x[i];
-                sy += y[i];
-                sxy += x[i] * y[i];
-                sxx += x[i] * x[i];
-            }
-            const mx = sx / n;
-            const my = sy / n;
-            const xx = n * sxx - sx * sx;
-            const xy = n * sxy - sx * sy;
-            const slope = xy / xx;
-            const intercept = my - slope * mx;
+        const mx = sx / n;
+        const my = sy / n;
+        const xx = n * sxx - sx * sx;
+        const xy = n * sxy - sx * sy;
+        const slope = xy / xx;
+        const intercept = my - slope * mx;
 
-            return y.map((yi, i) => yi - (intercept + slope * i));
-        }
+        return y.map((yi, i) => yi - (intercept + slope * i));
+      }
 
-        // Frame computation and heartbeat detection
-        function computeFrame() {
-            if (nFrame > 100) {
-                ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
-                let frame = ctx.getImageData(0, 0, video.videoWidth, video.videoHeight);
-                const count = frame.data.length / 4;
-                let rgbRed = 0;
+      function windowMean(y) {
+        return y.reduce((sum, yi) => sum + yi, 0) / y.length;
+      }
 
-                for (let i = 0; i < count; i++) {
-                    rgbRed += frame.data[i * 4]; // Only using the red channel
-                }
+      function stopMeasuring() {
+        measuring = false;
+        heart.style.visibility = "hidden";
+        toggleFlash(false);
+        retryButton.style.display = "inline-block";
+        output.textContent =
+          "Measurement complete. Click 'Read Again' to measure again.";
+      }
 
-                xMean = 1 - rgbRed / (count * 255);
-                acdc[nFrame % WINDOW_LENGTH] = xMean;
-
-                // Calculate AC from AC-DC only every WINDOW_LENGTH frames
-                if (nFrame % WINDOW_LENGTH === 0) {
-                    ac = detrend(acdc);
-                }
-                acFrame = ac[nFrame % WINDOW_LENGTH];
-
-                // Update heart animation based on signal strength
-                if (acFrame > 0.5) {
-                    heart.style.visibility = 'visible';
-                } else {
-                    heart.style.visibility = 'hidden';
-                }
-
-                nFrame += 1;
-                frameCount += 1;
-            }
-
-            setTimeout(computeFrame, 50); // Continue processing frames
-        }
-
-        function onRecord() {
-            this.disabled = true;
-            navigator.mediaDevices.getUserMedia(constraintsObj)
-                .then(function(mediaStreamObj) {
-                    const track = mediaStreamObj.getVideoTracks()[0];
-                    const imageCapture = new ImageCapture(track);
-                    imageCapture.getPhotoCapabilities()
-                        .then(() => {
-                            track.applyConstraints({
-                                advanced: [{ torch: true }]
-                            }).catch(err => console.log('Torch error', err));
-                        }).catch(err => console.log('No torch', err));
-
-                    video.srcObject = mediaStreamObj;
-                    video.onloadedmetadata = function() {
-                        video.play();
-                    };
-
-                    video.addEventListener('play', setWH);
-                    video.addEventListener('play', computeFrame);
-                })
-                .catch(error => console.log(error));
-        }
-
-        recordButton.addEventListener('click', onRecord);
+      function resetApp() {
+        startButton.style.display = "inline-block";
+        retryButton.style.display = "none";
+        output.textContent = 'Click "Start Measuring" to begin.';
+      }
     </script>
-</body>
+  </body>
 </html>
