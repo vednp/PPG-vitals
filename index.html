@@ -114,21 +114,20 @@
         heart.style.visibility = "visible";
         output.textContent = "Measuring...";
 
-        navigator.mediaDevices
-          .getUserMedia(constraintsObj)
-          .then(function (mediaStreamObj) {
-            video.srcObject = mediaStreamObj;
-            video.play();
-            toggleFlash(true);
+        navigator.mediaDevices.getUserMedia(constraintsObj)
+    .then(function(mediaStreamObj) {
+        video.srcObject = mediaStreamObj;
+        video.play();
+        toggleFlash(true);
 
-            init();
-            video.addEventListener("play", computeFrame);
-            setTimeout(stopMeasuring, 20000); // Stop after 20 seconds
-          })
-          .catch(function (err) {
-            console.error("Error accessing camera: " + err);
-            output.textContent = "Error accessing camera.";
-          });
+        init();
+        video.addEventListener('play', computeFrame);
+        setTimeout(stopMeasuring, 20000); // Stop after 20 seconds
+    })
+    .catch(function(err) {
+        console.error("Error accessing camera: " + err.message);
+        output.textContent = "Error accessing camera. Please check permissions and use HTTPS.";
+    });
       }
 
       function init() {
